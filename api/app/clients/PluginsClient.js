@@ -19,6 +19,7 @@ class PluginsClient extends OpenAIClient {
     this.setOptions(options);
     this.openAIApiKey = this.apiKey;
     this.executor = null;
+    this.toolOutputs = [];
   }
 
   setOptions(options) {
@@ -72,6 +73,12 @@ class PluginsClient extends OpenAIClient {
     };
   }
 
+  async handleToolOutput(outputs) {
+    for (const output of outputs) {
+      this.toolOutputs.push(output);
+    }
+  }
+
   async initialize({ user, message, onAgentAction, onChainEnd, signal }) {
     const modelOptions = {
       modelName: this.agentOptions.model,
@@ -115,6 +122,7 @@ class PluginsClient extends OpenAIClient {
         debug: this.options?.debug,
         message,
       },
+      toolOutputCallback: this.handleToolOutput.bind(this),
     });
 
     if (this.tools.length > 0 && !this.functionsAgent) {
@@ -342,6 +350,11 @@ class PluginsClient extends OpenAIClient {
     if (this.result?.errorMessage?.length > 0 && this.result?.errorMessage?.includes('cancel')) {
       responseMessage.text = 'Cancelled.';
       return await this.handleResponseMessage(responseMessage, saveOptions, user);
+    }
+
+    if (this.toolOutputs && this.toolOutputs.length > 0) {
+      this.result.output += '\n' + this.toolOutputs.join('\n');
+      this.toolOutputs = [];
     }
 
     // If error occurred during generation (likely token_balance)

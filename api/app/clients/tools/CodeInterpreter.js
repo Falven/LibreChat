@@ -1,51 +1,138 @@
+const { posix, join } = require('node:path');
+const { writeFileSync } = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { Tool } = require('langchain/tools');
-const WebSocket = require('ws');
-const { promisify } = require('util');
-const fs = require('fs');
+const {
+  addCellsToNotebook,
+  executeCode,
+  getOrCreatePythonSession,
+  initializeManagers,
+  getOrCreateNotebook,
+  createServerSettings,
+  isDisplayData,
+} = require('./util/jupyterServerUtils');
+const { getDirname } = require('./util/envUtils');
 
+/**
+ * A simple example on how to use Jupyter server as a code interpreter.
+ */
 class CodeInterpreter extends Tool {
-  constructor() {
+  /**
+   * Constructs a new CodeInterpreter Tool for a particular user and their conversation.
+   * @param {object} interpreterOptions The options for the interpreter.
+   * @param {string} interpreterOptions.userId The user ID.
+   * @param {string} interpreterOptions.conversationId The conversation ID.
+   */
+  constructor({ userId, conversationId, toolOutputCallback }) {
     super();
-    this.name = 'code-interpreter';
-    this.description = `If there is plotting or any image related tasks, save the result as .png file. 
-    No need show the image or plot. USE print(variable_name) if you need output.You can run python codes with this plugin.You have to use print function in python code to get any result from this plugin. 
-    This does not support user input. Even if the code has input() function, change it to an appropriate value.
-    You can show the user the code with input() functions. But the code passed to the plug-in should not contain input().
-    You should provide properly formatted code to this plugin. If the code is executed successfully, the stdout will be returned to you. You have to print that to the user, and if the user had 
-    asked for an explanation, you have to provide one. If the output is "Error From here" or any other error message, 
-    tell the user "Python Engine Failed" and continue with whatever you are supposed to do.`;
 
-    // Create a promisified version of fs.unlink
-    this.unlinkAsync = promisify(fs.unlink);
+    this.name = 'python';
+    // GPT4 Advanced Data Analysis prompt
+    this.description =
+      "When you send a message containing Python code to python, it will be executed in a stateful Jupyter notebook environment. The drive at '/mnt/data' can be used to save and persist user files. Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.";
+
+    this.toolOutputCallback = toolOutputCallback;
+
+    // The userId and conversationId are used to create a unique fs hierarchy for the notebook path.
+    this.userId = userId;
+    this.conversationId = conversationId;
+    this.notebookName = `${conversationId}.ipynb`;
+    this.notebookPath = posix.join(userId, this.notebookName);
+
+    // Create single user Jupyter server settings.
+    const serverSettings = createServerSettings();
+
+    const { contentsManager, sessionManager } = initializeManagers(serverSettings);
+    this.contentsManager = contentsManager;
+    this.sessionManager = sessionManager;
   }
 
-  async _call(input) {
-    const websocket = new WebSocket('ws://localhost:3380'); // Update with your WebSocket server URL
+  /**
+   * Saves an image to the images directory.
+   * @param base64ImageData The base64 encoded image data.
+   */
+  saveImage(base64ImageData) {
+    const imageData = Buffer.from(base64ImageData, 'base64');
+    const imageName = `${randomUUID()}.png`;
+    const imagePath = join(
+      getDirname(),
+      '..',
+      '..',
+      '..',
+      '..',
+      '..',
+      'client',
+      'public',
+      'images',
+      imageName,
+    );
+    writeFileSync(imagePath, imageData);
+    return imageName;
+  }
 
-    // Wait until the WebSocket connection is open
-    await new Promise((resolve) => {
-      websocket.onopen = resolve;
-    });
+  /**
+   * Saves images to the images directory and returns markdown links to the images.
+   * @param {*} outputs The outputs from the Jupyter kernel.
+   * @returns {string[]} The markdown links to the images.
+   */
+  saveImages(outputs) {
+    let markdownImages = [];
+    for (const output of outputs) {
+      if (isDisplayData(output)) {
+        const imageOutput = output.data['image/png'];
+        const imageName = this.saveImage(
+          typeof imageOutput === 'object' ? JSON.stringify(imageOutput) : imageOutput,
+        );
+        markdownImages.push(`![Generated Image](/images/${imageName})`);
+      }
+    }
+    return markdownImages;
+  }
 
-    // Send the Python code to the server
-    websocket.send(input);
+  /**
+   * This method is called when the tool is invoked.
+   * @param {any} arg The code to execute.
+   * @returns {Promise<string>} The code execution output.
+   */
+  async _call(arg) {
+    try {
+      if (typeof arg !== 'string') {
+        throw new Error(`Expected string input, but got ${typeof arg}.`);
+      }
 
-    // Wait for the result from the server
-    const result = await new Promise((resolve) => {
-      websocket.onmessage = (event) => {
-        resolve(event.data);
-      };
+      // Get or Create the notebook if it doesn't exist.
+      const notebookModel = await getOrCreateNotebook(this.contentsManager, this.notebookPath);
 
-      // Handle WebSocket connection closed
-      websocket.onclose = () => {
-        resolve('Python Engine Failed');
-      };
-    });
+      // Get or create a Jupyter python kernel session.
+      const session = await getOrCreatePythonSession(
+        this.sessionManager,
+        this.userId,
+        this.notebookName,
+        this.conversationId,
+      );
 
-    // Close the WebSocket connection
-    websocket.close();
+      // Execute the code and get the result.
+      const [result, outputs, executionCount] = await executeCode(session, arg);
 
-    return result;
+      // Save images to the images directory.
+      const markdownImages = this.saveImages(outputs);
+
+      // Pass image outputs to the outputs callback.
+      this.toolOutputCallback(markdownImages);
+
+      // Add the code and result to the notebook.
+      addCellsToNotebook(notebookModel, arg, outputs, executionCount);
+
+      // Save the notebook.
+      await this.contentsManager.save(this.notebookPath, notebookModel);
+
+      // Return the result to the Assistant.
+      return result;
+    } catch (error) {
+      console.error(error);
+      // Inform the Assistant that an error occurred.
+      return `Error executing code: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 }
 

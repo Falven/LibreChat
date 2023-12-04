@@ -93,6 +93,7 @@ const loadTools = async ({
   returnMap = false,
   tools = [],
   options = {},
+  toolOutputCallback = null,
 }) => {
   const toolConstructors = {
     calculator: Calculator,
@@ -171,6 +172,13 @@ const loadTools = async ({
           new ChatOpenAI({ openAIApiKey: options.openAIApiKey, temperature: 0 }),
         ),
       ];
+    },
+    codeinterpreter: async () => {
+      return new CodeInterpreter({
+        userId: user,
+        conversationId: options.conversationId,
+        toolOutputCallback,
+      });
     },
   };
 

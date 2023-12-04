@@ -168,15 +168,9 @@
   {
     "name": "Code Interpreter",
     "pluginKey": "codeinterpreter",
-    "description": "[Experimental] Analyze files and run code online with ease. Requires dockerized python server in /pyserver/",
-    "icon": "/assets/code.png",
-    "authConfig": [
-      {
-        "authField": "OPENAI_API_KEY",
-        "label": "OpenAI API Key",
-        "description": "Gets Code from Open AI API"
-      }
-    ]
+    "description": "Analyze files and run code online with ease. Requires interpreter server.",
+    "icon": "https://github.com/Falven/Open-Data-Analysis/blob/main/assets/open_advanced_data_analysis_icon_256.png?raw=true",
+    "authConfig": []
   },
   {
     "name": "CodeBrew",
