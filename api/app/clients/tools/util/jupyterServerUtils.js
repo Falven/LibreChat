@@ -152,6 +152,7 @@ const getOrCreatePythonSession = async (sessionManager, userId, notebookName, no
  * Processes a message from the Jupyter kernel and returns a list of outputs and the final result.
  * @param {IIOPubMessage<IOPubMessageType>} msg The message from the Jupyter kernel.
  * @param {IOutput[]} outputs The list of outputs.
+ * @returns {[string, string, ExecutionCount]} The final stdout and stderr results and the list of outputs.
  */
 const processMessage = async (msg, outputs) => {
   outputs.push({
@@ -159,21 +160,22 @@ const processMessage = async (msg, outputs) => {
     ...msg.content,
   });
 
-  let result = '';
+  let stdout = '';
+  let stderr = '';
   let execution_count = null;
   if (isExecuteResultMsg(msg)) {
     const textOutput = msg.content.data['text/plain'];
-    result += typeof textOutput === 'object' ? JSON.stringify(textOutput) : textOutput;
+    stdout += typeof textOutput === 'object' ? JSON.stringify(textOutput) : textOutput;
     execution_count = msg.content.execution_count;
   } else if (isDisplayDataMsg(msg)) {
-    result += 'Image displayed.';
+    stdout += 'The tool has generated an image and displayed it to the user.';
   } else if (isStreamMsg(msg)) {
-    result += msg.content.text;
+    msg.content.name === 'stdout' ? (stdout += msg.content.text) : (stderr += msg.content.text);
   } else if (isErrorMsg(msg)) {
-    result += msg.content.traceback.join('\n');
+    stdout += msg.content.traceback.join('\n');
   }
 
-  return [result, execution_count];
+  return [stdout, stderr, execution_count];
 };
 
 /**
@@ -189,17 +191,19 @@ const executeCode = async (session, input) => {
 
   const future = session.kernel.requestExecute({ code: input });
 
-  let result = '';
+  let stdout = '';
+  let stderr = '';
   let executionCount = null;
   const outputs = [];
   future.onIOPub = async (msg) => {
-    const [partialResult, execution_count] = await processMessage(msg, outputs);
-    result += partialResult;
+    const [partialStdout, partialStderr, execution_count] = await processMessage(msg, outputs);
+    stdout += partialStdout;
+    stderr += partialStderr;
     executionCount = execution_count;
   };
   await future.done;
 
-  return [result, outputs, executionCount];
+  return [stdout, stderr, outputs, executionCount];
 };
 
 /**

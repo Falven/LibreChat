@@ -167,7 +167,7 @@
   },
   {
     "name": "Code Interpreter",
-    "pluginKey": "codeinterpreter",
+    "pluginKey": "python",
     "description": "Analyze files and run code online with ease. Requires interpreter server.",
     "icon": "https://github.com/Falven/Open-Data-Analysis/blob/main/assets/open_advanced_data_analysis_icon_256.png?raw=true",
     "authConfig": []
